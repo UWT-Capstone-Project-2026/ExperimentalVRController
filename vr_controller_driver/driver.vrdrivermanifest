@@ -1,0 +1,7 @@
+{
+    "alwaysActivate": true,
+    "name": vr_controller_driver,
+    "directory": "",
+    "resourceOnly": false,
+    "hmd_presence": []
+}
