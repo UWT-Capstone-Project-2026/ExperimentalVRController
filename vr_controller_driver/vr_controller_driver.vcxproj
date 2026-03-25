@@ -165,7 +165,7 @@
   <ItemGroup>
     <ClCompile Include="..\src\controller_device.cpp" />
     <ClCompile Include="..\src\device_provider.cpp" />
-    <ClCompile Include="..\src\hml_driver_factory.cpp" />
+    <ClCompile Include="..\src\hmd_driver_factory.cpp" />
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="..\src\controller_device.h" />

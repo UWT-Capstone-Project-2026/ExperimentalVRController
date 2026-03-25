@@ -21,7 +21,7 @@
     <ClCompile Include="..\src\device_provider.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
-    <ClCompile Include="..\src\hml_driver_factory.cpp">
+    <ClCompile Include="..\src\hmd_driver_factory.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
   </ItemGroup>
