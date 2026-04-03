@@ -3,17 +3,21 @@
 vr::EVRInitError DeviceProvider::Init(vr::IVRDriverContext* pDriverContext) {
     VR_INIT_SERVER_DRIVER_CONTEXT(pDriverContext);
 
-    vr::VRDriverLog()->Log("Hello world!");
+    vr::VRDriverLog()->Log("VR Controller Driver: Initializing");
 
-	my_left_device = std::make_unique<ControllerDevice>(vr::TrackedControllerRole_LeftHand);
-    vr::VRServerDriverHost()->TrackedDeviceAdded("<my_left_serial_number>",
-		                                        vr::TrackedDeviceClass_Controller, 
-                                                my_left_device.get());
+    // Left hand controller listens for ESP32 packets on UDP port 5555
+	my_left_device = std::make_unique<ControllerDevice>(vr::TrackedControllerRole_LeftHand, 5555);
+    vr::VRServerDriverHost()->TrackedDeviceAdded(
+        "VRController_Left_001",
+		vr::TrackedDeviceClass_Controller, 
+        my_left_device.get());
 
-    my_right_device = std::make_unique<ControllerDevice>(vr::TrackedControllerRole_RightHand);
-    vr::VRServerDriverHost()->TrackedDeviceAdded("<my_right_serial_number>",
-                                                vr::TrackedDeviceClass_Controller,
-                                                my_right_device.get());
+    // Right hand controller listens on UDP port 5556
+    my_right_device = std::make_unique<ControllerDevice>(vr::TrackedControllerRole_RightHand, 5556);
+    vr::VRServerDriverHost()->TrackedDeviceAdded(
+        "VRController_Right_001",
+        vr::TrackedDeviceClass_Controller,
+        my_right_device.get());
 
     return vr::VRInitError_None;
 }
@@ -40,10 +44,5 @@ bool DeviceProvider::ShouldBlockStandbyMode() {
     return false;
 }
 
-void DeviceProvider::EnterStandby() {
-
-}
-
-void DeviceProvider::LeaveStandby() {
-
-}
+void DeviceProvider::EnterStandby() {}
+void DeviceProvider::LeaveStandby() {}

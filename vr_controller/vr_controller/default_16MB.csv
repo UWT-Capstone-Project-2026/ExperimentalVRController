@@ -1,0 +1,8 @@
+# Name,   Type, SubType, Offset,  Size, Flags
+nvs,      data, nvs,     ,        0x4000,
+otadata,  data, ota,     ,        0x2000,
+phy_init, data, phy,     ,        0x1000,
+# Factory app (10MB)
+factory,  app,  factory, ,        10M,
+# File system (approx 5MB remaining, adjust as needed)
+spiffs,   data, spiffs,  ,        5M,
