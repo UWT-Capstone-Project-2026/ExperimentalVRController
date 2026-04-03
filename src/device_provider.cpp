@@ -5,6 +5,16 @@ vr::EVRInitError DeviceProvider::Init(vr::IVRDriverContext* pDriverContext) {
 
     vr::VRDriverLog()->Log("Hello world!");
 
+	my_left_device = std::make_unique<ControllerDevice>(vr::TrackedControllerRole_LeftHand);
+    vr::VRServerDriverHost()->TrackedDeviceAdded("<my_left_serial_number>",
+		                                        vr::TrackedDeviceClass_Controller, 
+                                                my_left_device.get());
+
+    my_right_device = std::make_unique<ControllerDevice>(vr::TrackedControllerRole_RightHand);
+    vr::VRServerDriverHost()->TrackedDeviceAdded("<my_right_serial_number>",
+                                                vr::TrackedDeviceClass_Controller,
+                                                my_right_device.get());
+
     return vr::VRInitError_None;
 }
 
@@ -17,7 +27,13 @@ const char* const* DeviceProvider::GetInterfaceVersions() {
 }
 
 void DeviceProvider::RunFrame() {
+	if (my_left_device != nullptr) {
+        my_left_device->RunFrame();
+    }
 
+	if (my_right_device != nullptr) {
+        my_right_device->RunFrame();
+    }
 }
 
 bool DeviceProvider::ShouldBlockStandbyMode() {

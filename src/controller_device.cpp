@@ -10,6 +10,26 @@ vr::EVRInitError ControllerDevice::Activate(uint32_t unObjectId) {
     vr::VRProperties()->SetStringProperty(container, vr::Prop_ModelNumber_String, "<my_controller_model_number>");
 
     device_id_ = unObjectId;
+
+    // Tell the runtime where our input profile is located
+    vr::VRProperties()->SetStringProperty(container, vr::Prop_InputProfilePath_String,
+        "{vr_controller_driver}/resources/input/vr_controller_driver_profile.json");
+
+    vr::VRDriverInput()->CreateBooleanComponent(container, "/input/a/click", &my_input_handles_[kInputHandle_A_click]);
+    vr::VRDriverInput()->CreateBooleanComponent(container, "/input/a/touch", &my_input_handles_[kInputHandle_A_touch]);
+
+    vr::VRDriverInput()->CreateScalarComponent(container, "/input/trigger/value", &my_input_handles_[kInputHandle_trigger_value],
+        vr::VRScalarType_Absolute, vr::VRScalarUnits_NormalizedOneSided);
+    vr::VRDriverInput()->CreateBooleanComponent(container, "/input/trigger/click", &my_input_handles_[kInputHandle_trigger_click]);
+
+    vr::VRDriverInput()->CreateScalarComponent(container, "/input/joystick/x", &my_input_handles_[kInputHandle_joystick_x],
+        vr::VRScalarType_Absolute, vr::VRScalarUnits_NormalizedTwoSided);
+    vr::VRDriverInput()->CreateScalarComponent(container, "/input/joystick/y", &my_input_handles_[kInputHandle_joystick_y],
+        vr::VRScalarType_Absolute, vr::VRScalarUnits_NormalizedTwoSided);
+    vr::VRDriverInput()->CreateBooleanComponent(container, "/input/joystick/click", &my_input_handles_[kInputHandle_joystick_click]);
+
+    vr::VRDriverInput()->CreateHapticComponent(container, "/output/haptic", &my_input_handles_[kInputHandle_haptic]);
+
     return vr::VRInitError_None;
 }
 
@@ -26,6 +46,18 @@ void* ControllerDevice::GetComponent(const char* pchComponentNameAndVersion) {
 void ControllerDevice::DebugRequest(const char* pchRequest, char* pchResponseBuffer, uint32_t unResponseBufferSize) {
     if (unResponseBufferSize >= 1)
         pchResponseBuffer[0] = 0;
+}
+
+void ControllerDevice::RunFrame() {
+	vr::VRServerDriverHost()->TrackedDevicePoseUpdated(device_id_, GetPose(), sizeof(vr::DriverPose_t));
+
+    vr::VRDriverInput()->UpdateBooleanComponent(my_input_handles_[kInputHandle_A_click], 1, 0.0);
+    vr::VRDriverInput()->UpdateBooleanComponent(my_input_handles_[kInputHandle_A_touch], 1, 0.0);
+    vr::VRDriverInput()->UpdateScalarComponent(my_input_handles_[kInputHandle_trigger_value], 0.5, 0.0);
+    vr::VRDriverInput()->UpdateScalarComponent(my_input_handles_[kInputHandle_trigger_click], true, 0.0);
+    vr::VRDriverInput()->UpdateScalarComponent(my_input_handles_[kInputHandle_joystick_x], true, 0.0);
+    vr::VRDriverInput()->UpdateScalarComponent(my_input_handles_[kInputHandle_joystick_y], true, 0.0);
+    vr::VRDriverInput()->UpdateBooleanComponent(my_input_handles_[kInputHandle_joystick_click], 1, 0.0);
 }
 
 template < class T >
@@ -47,32 +79,39 @@ vr::HmdQuaternion_t HmdQuaternion_FromMatrix(const T& matrix)
 
 vr::DriverPose_t ControllerDevice::GetPose() {
     vr::DriverPose_t pose = { 0 };
-
     pose.poseIsValid = true;
     pose.result = vr::TrackingResult_Running_OK;
     pose.deviceIsConnected = true;
-
     pose.qWorldFromDriverRotation.w = 1.f;
     pose.qDriverFromHeadRotation.w = 1.f;
 
-    pose.qRotation.w = 1.f;
-
-    vr::TrackedDevicePose_t hmd_pose{};
-    vr::VRServerDriverHost()->GetRawTrackedDevicePoses(0.f, &hmd_pose, 1);
-
-    const vr::HmdQuaternion_t hmd_orientation = HmdQuaternion_FromMatrix(hmd_pose.mDeviceToAbsoluteTracking);
-    pose.qRotation = hmd_orientation;
-
-    pose.vecPosition[0] = my_controller_role_ == vr::TrackedControllerRole_LeftHand
-        ? hmd_pose.mDeviceToAbsoluteTracking.m[0][3] - 0.2f
-        : hmd_pose.mDeviceToAbsoluteTracking.m[0][3] + 0.2f;
-
-    pose.vecPosition[1] = hmd_pose.mDeviceToAbsoluteTracking.m[1][3];
-    pose.vecPosition[2] = hmd_pose.mDeviceToAbsoluteTracking.m[2][3] - 0.5f;
+    std::lock_guard<std::mutex> lock(pose_mutex_);
+    pose.qRotation.w = live_pose_.qw;
+    pose.qRotation.x = live_pose_.qx;
+    pose.qRotation.y = live_pose_.qy;
+    pose.qRotation.z = live_pose_.qz;
+    pose.vecPosition[0] = live_pose_.x;
+    pose.vecPosition[1] = live_pose_.y;
+    pose.vecPosition[2] = live_pose_.z;
 
     return pose;
 }
 
-void ControllerDevice::RunFrame() {
-    vr::VRServerDriverHost()->TrackedDevicePoseUpdated(device_id_, GetPose(), sizeof(vr::DriverPose_t));
+void ControllerDevice::ReceiverThread() {
+    // Windows: Winsock, Linux: POSIX sockets
+    // Bind to UDP port 5555 (left) or 5556 (right)
+
+    while (running_) {
+        ControllerPacket pkt;
+        // recvfrom(...) into pkt
+
+        std::lock_guard<std::mutex> lock(pose_mutex_);
+        live_pose_.qw = pkt.qw;
+        live_pose_.qx = pkt.qx;
+        live_pose_.qy = pkt.qy;
+        live_pose_.qz = pkt.qz;
+        live_pose_.x = pkt.x;
+        live_pose_.y = pkt.y;
+        live_pose_.z = pkt.z;
+    }
 }

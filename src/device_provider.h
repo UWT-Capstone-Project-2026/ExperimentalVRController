@@ -1,6 +1,8 @@
 #pragma once
+#include <memory>
 
 #include "openvr_driver.h"
+#include "controller_device.h"
 
 class DeviceProvider : public vr::IServerTrackedDeviceProvider {
 public:
@@ -12,4 +14,8 @@ public:
     bool ShouldBlockStandbyMode() override;
     void EnterStandby() override;
     void LeaveStandby() override;
+
+private:
+    std::unique_ptr<ControllerDevice> my_left_device;
+	std::unique_ptr<ControllerDevice> my_right_device;
 };
