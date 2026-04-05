@@ -1,0 +1,12 @@
+{
+	"folders": [
+		{
+			"path": "../.."
+		},
+		{
+			"name": "vr_controller",
+			"path": "."
+		}
+	],
+	"settings": {}
+}
