@@ -1,4 +1,5 @@
 #include "controller_device.h"
+#pragma comment(lib, "ws2_32.lib")
 
 // -------------------------------------------------------------------------------------
 // Construction
@@ -6,12 +7,19 @@
 ControllerDevice::ControllerDevice(vr::ETrackedControllerRole role, uint16_t udp_port) 
     : my_controller_role_(role), 
       device_id_(vr::k_unTrackedDeviceIndexInvalid), 
-      udp_port_(udp_port)
+      udp_port_(udp_port),
+      my_input_handles_{}
 {
     // Initialize Winsock once per controller. WSAStartup is safe to call multiple times
     // as long as WSACleanup is called the same number of times.
     WSADATA wsa_data;
-    WSAStartup(MAKEWORD(2, 2), &wsa_data);
+    int wsa_result = WSAStartup(MAKEWORD(2, 2), &wsa_data);
+    if (wsa_result != 0) {
+        // We cannot use vr::VRDriverLog() here because the VR runtime context
+        // has not been initialized yet at construction time. OutputDebugString
+        // sends the message to the Visual Studio Output window instead.
+        OutputDebugStringA("ControllerDevice: WSAStartup failed\n");
+    }
 };
 
 // -------------------------------------------------------------------------------------
