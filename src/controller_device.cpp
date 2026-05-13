@@ -111,20 +111,21 @@ void ControllerDevice::DebugRequest(const char* pchRequest, char* pchResponseBuf
 // RunFrame - called by SteamVR on the main driver thread, ~90 times per second
 // -------------------------------------------------------------------------------------
 void ControllerDevice::RunFrame() {
-    // Submit the latest pose to SteamVR. GetPose() locks pose_mutex_ internally
-    // so it reads a consistent snapshot of live_pose_.
-	vr::VRServerDriverHost()->TrackedDevicePoseUpdated(device_id_, GetPose(), sizeof(vr::DriverPose_t));
+    // Guard: device_id_ is k_unTrackedDeviceIndexInvalid until Activate() completes.
+    // Calling TrackedDevicePoseUpdated or UpdateBooleanComponent before that
+    // produces the "invalid object ID -1" and "Invalid handle" errors in the log.
+    if (device_id_ == vr::k_unTrackedDeviceIndexInvalid) return;
 
-    // --Input Updates----------------------------------------------------------------
-    // There are placeholder values. Replace with real data from the ESP32 packet
-    // once button state is included in ControllerPacket
-    vr::VRDriverInput()->UpdateBooleanComponent(my_input_handles_[kInputHandle_A_click],        false,  0.0);
-    vr::VRDriverInput()->UpdateBooleanComponent(my_input_handles_[kInputHandle_A_touch],        false,  0.0);
-    vr::VRDriverInput()->UpdateScalarComponent(my_input_handles_[kInputHandle_trigger_value],   0.f,    0.0);
-    vr::VRDriverInput()->UpdateScalarComponent(my_input_handles_[kInputHandle_trigger_click],   false,  0.0);
-    vr::VRDriverInput()->UpdateScalarComponent(my_input_handles_[kInputHandle_joystick_x],      0.0f,   0.0);
-    vr::VRDriverInput()->UpdateScalarComponent(my_input_handles_[kInputHandle_joystick_y],      0.0f,   0.0);
-    vr::VRDriverInput()->UpdateBooleanComponent(my_input_handles_[kInputHandle_joystick_click], false,  0.0);
+    vr::VRServerDriverHost()->TrackedDevicePoseUpdated(device_id_, GetPose(), sizeof(vr::DriverPose_t));
+
+    vr::VRDriverInput()->UpdateBooleanComponent(my_input_handles_[kInputHandle_A_click], false, 0.0);
+    vr::VRDriverInput()->UpdateBooleanComponent(my_input_handles_[kInputHandle_A_touch], false, 0.0);
+    vr::VRDriverInput()->UpdateScalarComponent(my_input_handles_[kInputHandle_trigger_value], 0.f, 0.0);
+    vr::VRDriverInput()->UpdateBooleanComponent(my_input_handles_[kInputHandle_trigger_click], false, 0.0); // Fixed: was UpdateScalarComponent
+    vr::VRDriverInput()->UpdateScalarComponent(my_input_handles_[kInputHandle_joystick_x], 0.0f, 0.0);
+    vr::VRDriverInput()->UpdateScalarComponent(my_input_handles_[kInputHandle_joystick_y], 0.0f, 0.0);
+    vr::VRDriverInput()->UpdateBooleanComponent(my_input_handles_[kInputHandle_joystick_click], false, 0.0);
+
 }
 
 // -------------------------------------------------------------------------------------
