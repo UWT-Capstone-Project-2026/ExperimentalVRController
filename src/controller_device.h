@@ -1,11 +1,24 @@
+// ====================== Copyright (c) Valve Corporation, All rights reserved. ============================ //
 #pragma once
+
 #include <array>
-#include <thread>
-#include <mutex>
-#include <atomic>
+#include <string>
 
 #include "openvr_driver.h"
+#include <atomic>
+#include <thread>
 
+enum MyComponent
+{
+    MyComponent_a_touch,
+    MyComponent_a_click,
+    MyComponent_trigger_value,
+    MyComponent_trigger_click,
+    MyComponent_haptic,
+    MyComponent_MAX
+};
+
+/* Original version of controller driver - ignore for now but review for implementation of our actual controller design.
 // Winsock for UDP communication with the ESP32
 #ifndef WIN32_LEAN_AND_MEAN
 #define WIN32_LEAN_AND_MEAN
@@ -41,42 +54,47 @@ struct ControllerPacket {
 };
 #pragma pack(pop)
 
-class ControllerDevice : public vr::ITrackedDeviceServerDriver {
-public:
-    // udp_port: the port this controller listens on (e.g. 5555 for left, 5556 for right)
-    ControllerDevice(vr::ETrackedControllerRole role, uint16_t udp_port);
+*/
 
-    // Inherited via ITrackedDeviceServerDriver
-    virtual vr::EVRInitError Activate(uint32_t unObjectId) override;
-    virtual void Deactivate() override;
-    virtual void EnterStandby() override;
-    virtual void* GetComponent(const char* pchComponentNameAndVersion) override;
-    virtual void DebugRequest(const char* pchRequest, char* pchResponseBuffer, uint32_t unResponseBufferSize) override;
-    virtual vr::DriverPose_t GetPose() override;
-    virtual void RunFrame();
+// ----------------------------------------------------------------------
+// Purpose: Represent a single tracked device in the system.
+// What this device actually is (controller, hmd) depends on the
+// properties you set within the device (see implementation of Activate)
+// ----------------------------------------------------------------------
+class MyControllerDevice : public vr::ITrackedDeviceServerDriver 
+{
+public:
+    MyControllerDevice(vr::ETrackedControllerRole role);
+
+    vr::EVRInitError Activate(uint32_t unObjectID) override;
+
+    void EnterStandby() override;
+
+    void* GetComponent(const char* pchComponentNameAndVersion) override;
+
+    void DebugRequest(const char* pchRequest, char* pchResponseBuffer, uint32_t unResponseBufferSize) override;
+
+    vr::DriverPose_t GetPose() override;
+
+    void Deactivate() override;
+
+    // ------------- Functions we declare ourselves below ----------------- //
+    const std::string& MyGetSerialNumber();
+
+    void MyRunFrame();
+    void MyProcessEvent(const vr::VREvent_t& vrevent);
+
+    void MyPoseUpdateThread();
 
 private:
-    // The latest pose data received from the ESP32, protected by pose_mutex_.
-    // GetPose() reads this; ReceiverThread() writes it.
-    struct LivePoseData {
-        float qw = 1, qx = 0, qy = 0, qz = 0;   // Identity quaternion by default
-        float x = 0, y = 0, z = 0;
-    };
+    std::atomic<vr::TrackedDeviceIndex_t> my_controller_index;
 
-    void ReceiverThread();
-    bool ValidateChecksum(const ControllerPacket& pkt);
+    vr::ETrackedControllerRole my_controller_role;
+    std::string my_controller_model_number;
+    std::string my_controller_serial_number;
 
-    vr::ETrackedControllerRole  my_controller_role_;
-    vr::TrackedDeviceIndex_t    device_id_;
-    uint16_t                    udp_port_;
+    std::array<vr::VRInputComponentHandle_t, MyComponent_MAX> input_handles;
 
-    std::array<vr::VRInputComponentHandle_t, kInputHandle_COUNT> my_input_handles_;
-
-    std::mutex          pose_mutex_;
-    LivePoseData        live_pose_;
-    std::thread         recv_thread_;
-    std::atomic<bool>   running_ {false};
-
-    // Winsock socket handle for UDP receive
-    SOCKET udp_socket_ = INVALID_SOCKET;
+    std::atomic<bool> is_active;
+    std::thread my_pose_update_thread;
 };

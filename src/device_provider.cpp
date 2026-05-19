@@ -1,48 +1,116 @@
+// ================= Copyright (c) Valve Corporation, All rights reserved. ================ //
 #include "device_provider.h"
+#include "driverlog.h"
 
-vr::EVRInitError DeviceProvider::Init(vr::IVRDriverContext* pDriverContext) {
-    VR_INIT_SERVER_DRIVER_CONTEXT(pDriverContext);
+// --------------------------------------------------------------------------------------------
+// Purpose: This is called by vrserver after it receives a pointer back from HmdDriverFactory.
+// You should do your resources allocations here (**not** in the constructor)
+// --------------------------------------------------------------------------------------------
+vr::EVRInitError MyDeviceProvider::Init(vr::IVRDriverContext* pDriverContext)
+{
+	// We need to initialize our driver context to make calls to the server.
+	// OpenVR provides a macro to do this for us.
+	VR_INIT_SERVER_DRIVER_CONTEXT(pDriverContext);
 
-    vr::VRDriverLog()->Log("VR Controller Driver: Initializing");
+	// Let's add our controllers to the system.
+	// First, we need to acutally instantiate our controller devices.
+	// We made the constructor take in a controller role, so let's pass their respective roles in.
+	my_left_device = std::make_unique<MyControllerDevice>(vr::TrackedControllerRole_LeftHand);
+	my_right_device = std::make_unique<MyControllerDevice>(vr::TrackedControllerRole_RightHand);
 
-    // Left hand controller listens for ESP32 packets on UDP port 5555
-	my_left_device = std::make_unique<ControllerDevice>(vr::TrackedControllerRole_LeftHand, 5555);
-    vr::VRServerDriverHost()->TrackedDeviceAdded(
-        "VRController_Left_001",
-		vr::TrackedDeviceClass_Controller, 
-        my_left_device.get());
+	// Now we need to tell vrserver about our controllers.
+	// The first argument is the serial number of the device, which must be unique across all devices.
+	// We get it from our driver settings when we instantiate,
+	// And can pass it out of the function with MyGetSerialNumber().
+	// Let's add the left hand controller first (there isn't a specific order).
+	// Make sure we actually managed to create the device.
+	// TrackedDeviceAdded returning true means we have had our device added to SteamVR.
+	if (!vr::VRServerDriverHost()->TrackedDeviceAdded(my_left_device->MyGetSerialNumber().c_str(), vr::TrackedDeviceClass_Controller, my_left_device.get()))
+	{
+		DriverLog("Failed to create left controller device!");
+		// We failed? Return early.
+		return vr::VRInitError_Driver_Unknown;
+	}
 
-    // Right hand controller listens on UDP port 5556
-    my_right_device = std::make_unique<ControllerDevice>(vr::TrackedControllerRole_RightHand, 5556);
-    vr::VRServerDriverHost()->TrackedDeviceAdded(
-        "VRController_Right_001",
-        vr::TrackedDeviceClass_Controller,
-        my_right_device.get());
+	// Now the right hand
+	// Make sure we actually managed to create the device.
+	// TrackedDeviceAdded returning true means we have had our device added to SteamVR.
+	if (!vr::VRServerDriverHost()->TrackedDeviceAdded(my_right_device->MyGetSerialNumber().c_str(), vr::TrackedDeviceClass_Controller, my_right_device.get()))
+	{
+		DriverLog("Failed to create right controller device!");
+		// We failed? Return early.
+		return vr::VRInitError_Driver_Unknown;
+	}
 
-    return vr::VRInitError_None;
+	return vr::VRInitError_None;
 }
 
-void DeviceProvider::Cleanup() {
-    VR_CLEANUP_SERVER_DRIVER_CONTEXT();
+// ---------------------------------------------------------------------------------------------------
+// Purpose: Tells the runtime which version of the API we are targeting.
+// Helper variables in the headder you're using contain this information, which can be returned here.
+// ---------------------------------------------------------------------------------------------------
+const char* const* MyDeviceProvider::GetInterfaceVersions()
+{
+	return vr::k_InterfaceVersions;
 }
 
-const char* const* DeviceProvider::GetInterfaceVersions() {
-    return vr::k_InterfaceVersions;
+// ---------------------------------------------------------------------------------------------------
+// Purpose: This function is deprecated and never called. 
+// But, it must still be defined, or we can't compile.
+// ---------------------------------------------------------------------------------------------------
+bool MyDeviceProvider::ShouldBlockStandbyMode()
+{
+	return false;
 }
 
-void DeviceProvider::RunFrame() {
-	if (my_left_device != nullptr) {
-        my_left_device->RunFrame();
-    }
+// ---------------------------------------------------------------------------------------------------
+// Purpose: This is called in the main loop of vrserver.
+// Drivers *can* do work here, but should ensure this work is relatively inexpensive.
+// A good thing to do here is poll for events from the runtime or applications.
+// ---------------------------------------------------------------------------------------------------
+void MyDeviceProvider::RunFrame()
+{
+	// Call our devices to run a frame
+	if (my_left_device != NULL)
+		my_left_device->MyRunFrame();
+	if (my_right_device != NULL)
+		my_right_device->MyRunFrame();
 
-	if (my_right_device != nullptr) {
-        my_right_device->RunFrame();
-    }
+	// Now, process events that were submitted for this frame
+	vr::VREvent_t vrevent{};
+	while (vr::VRServerDriverHost()->PollNextEvent(&vrevent, sizeof(vr::VREvent_t)))
+	{
+		if (my_left_device != NULL)
+			my_left_device->MyProcessEvent(vrevent);
+		if (my_right_device != NULL)
+			my_right_device->MyProcessEvent(vrevent);
+	}
 }
 
-bool DeviceProvider::ShouldBlockStandbyMode() {
-    return false;
+// ----------------------------------------------------------------------------------------------------
+// Purpose: This function is called when the system enters a period of inactivity.
+// The devices might want to turn off their displays or go into a low power mode to preserve them.
+// ----------------------------------------------------------------------------------------------------
+void MyDeviceProvider::EnterStandby()
+{
 }
 
-void DeviceProvider::EnterStandby() {}
-void DeviceProvider::LeaveStandby() {}
+// ----------------------------------------------------------------------------------------------------
+// Purpose: This function is called after the system has been in a period of inactivity, and is waking up again.
+// Turn back on the displays or devices here.
+// ----------------------------------------------------------------------------------------------------
+void MyDeviceProvider::LeaveStandby()
+{
+}
+
+// ----------------------------------------------------------------------------------------------------
+// Purpose: This function is called just before the driver is unloaded from vrserver.
+// Drivers should free whatever resources they have acquired over the session here.
+// Any calls to the server is guaranteed to be valid before this, but not after it has been called.
+// ----------------------------------------------------------------------------------------------------
+void MyDeviceProvider::Cleanup()
+{
+	// Our controller devices will have already deactivated. Let's now destroy them.
+	my_left_device = NULL;
+	my_right_device = NULL;
+}

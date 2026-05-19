@@ -1,20 +1,27 @@
+// ============= Copyright (c) Valve Corporation, All rights reserved. ================= //
 #pragma once
+
 #include <memory>
 
-#include "openvr_driver.h"
 #include "controller_device.h"
+#include "openvr_driver.h"
 
-class DeviceProvider : public vr::IServerTrackedDeviceProvider {
+// Make sure your class is publicly inheriting vr::IServerTrackedDeviceProvider
+class MyDeviceProvider : public vr::IServerTrackedDeviceProvider 
+{
 public:
     vr::EVRInitError Init(vr::IVRDriverContext* pDriverContext) override;
-    void Cleanup() override;
     const char* const* GetInterfaceVersions() override;
+
     void RunFrame() override;
+
     bool ShouldBlockStandbyMode() override;
     void EnterStandby() override;
     void LeaveStandby() override;
 
+    void Cleanup() override;
+
 private:
-    std::unique_ptr<ControllerDevice> my_left_device;
-	std::unique_ptr<ControllerDevice> my_right_device;
+    std::unique_ptr<MyControllerDevice> my_left_device;
+	std::unique_ptr<MyControllerDevice> my_right_device;
 };

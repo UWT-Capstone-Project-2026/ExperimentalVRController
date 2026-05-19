@@ -1,267 +1,295 @@
+// =============== Copyright (c) Valve Corporation, All rights reserved. ================ //
 #include "controller_device.h"
-#pragma comment(lib, "ws2_32.lib")
 
-// -------------------------------------------------------------------------------------
-// Construction
-// -------------------------------------------------------------------------------------
-ControllerDevice::ControllerDevice(vr::ETrackedControllerRole role, uint16_t udp_port) 
-    : my_controller_role_(role), 
-      device_id_(vr::k_unTrackedDeviceIndexInvalid), 
-      udp_port_(udp_port),
-      my_input_handles_{}
+#include "driverlog.h"
+#include "vrmath.h"
+
+// Let's create some variables for strings used in getting settings.
+// This is the section where all of the settings we want are stored. A section name can be anything
+// but if you want to store driver specific settings, it's best to namespace the section with the driver identifier
+// ie "<my_driver>_<section>" to avoid collisions
+static const char* my_controller_main_settings_section = "driver_simpleController";
+
+// Individual right/left hand settings sections
+static const char* my_controller_left_settings_section = "driver_simpleController_left";
+static const char* my_controller_right_settings_section = "driver_simpleController_right";
+
+// These are the keys we want to retrieve the values for in the settings
+static const char* my_controller_settings_key_model_number = "myController_model_number";
+static const char* my_controller_settings_key_serial_number = "myController_serial_number";
+
+MyControllerDevice::MyControllerDevice(vr::ETrackedControllerRole role)
 {
-    // Initialize Winsock once per controller. WSAStartup is safe to call multiple times
-    // as long as WSACleanup is called the same number of times.
-    WSADATA wsa_data;
-    int wsa_result = WSAStartup(MAKEWORD(2, 2), &wsa_data);
-    if (wsa_result != 0) {
-        // We cannot use vr::VRDriverLog() here because the VR runtime context
-        // has not been initialized yet at construction time. OutputDebugString
-        // sends the message to the Visual Studio Output window instead.
-        OutputDebugStringA("ControllerDevice: WSAStartup failed\n");
-    }
-};
+	// Set a member to keep trck of whether we've activated yet or not
+	is_active = false;
 
-// -------------------------------------------------------------------------------------
-// ITrackedDeviceServerDriver interface
-// -------------------------------------------------------------------------------------
-vr::EVRInitError ControllerDevice::Activate(uint32_t unObjectId) {
-    vr::VRDriverLog()->Log("ControllerDevice::Activate");
+	// The constructor takes a role argument, that gives us information about if our controller is a left or right hand.
+	// Let's store it for later use. We'll need it.
+	my_controller_role = role;
 
-    device_id_ = unObjectId;
+	// We have our model number and serial number stored in SteamVR settings. We need to get them and do so here.
+	// Other IVRSettings methods (to get int32, floats, bools) return the data, instead of modifying , but strings are
+	// different.
+	char model_number[1024];
+	vr::VRSettings()->GetString(my_controller_main_settings_section, my_controller_settings_key_model_number, model_number, sizeof(model_number));
+	my_controller_model_number = model_number;
 
-    const vr::PropertyContainerHandle_t container = 
-        vr::VRProperties()->TrackedDeviceToPropertyContainer(unObjectId);
+	// Get our serial number depending on our "handedness"
+	char serial_number[1024]; 
+	vr::VRSettings()->GetString(my_controller_role == vr::TrackedControllerRole_LeftHand ? my_controller_left_settings_section : my_controller_right_settings_section,
+		my_controller_settings_key_serial_number, serial_number, sizeof(serial_number));
+	my_controller_serial_number = serial_number;
 
-    vr::VRProperties()->SetInt32Property(container, vr::Prop_ControllerRoleHint_Int32, my_controller_role_);
-    vr::VRProperties()->SetStringProperty(container, vr::Prop_ModelNumber_String, "VR_Controller_v1.0.0");
-
-    // Tell the runtime where our input profile is located
-    vr::VRProperties()->SetStringProperty(container, vr::Prop_InputProfilePath_String,
-        "{vr_controller_driver}/resources/input/vr_controller_driver_profile.json");
-
-    // --Register input components-------------------------------------------------------
-    // Boolean components: report true/false (button pressed or not)
-    vr::VRDriverInput()->CreateBooleanComponent(container, "/input/a/click",        &my_input_handles_[kInputHandle_A_click]);
-    vr::VRDriverInput()->CreateBooleanComponent(container, "/input/a/touch",        &my_input_handles_[kInputHandle_A_touch]);
-    vr::VRDriverInput()->CreateBooleanComponent(container, "/input/trigger/click",  &my_input_handles_[kInputHandle_trigger_click]);
-    vr::VRDriverInput()->CreateBooleanComponent(container, "/input/joystick/click", &my_input_handles_[kInputHandle_joystick_click]);
-
-    // Scalar components: report a float value in a range
-    // NormalizedOneSided = range [0.0, 1.0] (trigger pull depth)
-    vr::VRDriverInput()->CreateScalarComponent(container, "/input/trigger/value", 
-        &my_input_handles_[kInputHandle_trigger_value],
-        vr::VRScalarType_Absolute, vr::VRScalarUnits_NormalizedOneSided);
-    
-    // NormalizedTwoSided = range [-1.0, 1.0] (joystick axis)
-    vr::VRDriverInput()->CreateScalarComponent(container, "/input/joystick/x", 
-        &my_input_handles_[kInputHandle_joystick_x],
-        vr::VRScalarType_Absolute, vr::VRScalarUnits_NormalizedTwoSided);
-    vr::VRDriverInput()->CreateScalarComponent(container, "/input/joystick/y", 
-        &my_input_handles_[kInputHandle_joystick_y],
-        vr::VRScalarType_Absolute, vr::VRScalarUnits_NormalizedTwoSided);
-    
-    // Haptic output component
-    vr::VRDriverInput()->CreateHapticComponent(container, "/output/haptic", 
-        &my_input_handles_[kInputHandle_haptic]);
-
-    // --Start the UDP receiver thread------------------------------------------------------
-    // Set running_ to true BEFORE launching the thread so the thread's
-    // while(running_) loop doesn't exit immediately on start.
-    running_ = true;
-    recv_thread_ = std::thread(&ControllerDevice::ReceiverThread, this);
-
-    return vr::VRInitError_None;
+	// Here's an example of how to use our logging wrapper around IVRDriverLog
+	// In SteamVR logs (SteamVR Hamburger Menu > Developer Settings > Web Console) drivers have a prefix of
+	// "<driver_name>:". You can search this in the top search bar to find the info that you've logged.
+	DriverLog("My Controller Model number: %s", my_controller_model_number.c_str());
+	DriverLog("My Controller Serial number: %s", my_controller_serial_number.c_str());
 }
 
-void ControllerDevice::Deactivate() {
-    // Signal the receiver thread to stop, then close the socket.
-    // Closing the socket causes any blocking recvfrom() to return with an
-    // error, which lets the thread exit its loop and join cleanly.
-    running_ = false;
+// ----------------------------------------------------------------------------
+// Purpose: This is called by vrserver after our
+// IServerTrackedDeviceProvider calls IVRServerDriverHost::TrackedDeviceAdded.
+// ----------------------------------------------------------------------------
+vr::EVRInitError MyControllerDevice::Activate(uint32_t unObjectId)
+{
+	// Set an member to keep track of whether we've activated yet or not
+	is_active = true;
 
-    if (udp_socket_ != INVALID_SOCKET) {
-        closesocket(udp_socket_);
-        udp_socket_ = INVALID_SOCKET;
-    }
+	// Let's keep track of our device index. It'll be useful later.
+	my_controller_index = unObjectId;
 
-    // Wait for the receiver thread to fully exit before this object is destroyed.
-    // Without this join, the thread could still be accessing member variables
-    // after the destructor runs, causing a crash.
-    if (recv_thread_.joinable()) {
-        recv_thread_.join();
-    }
+	// Properties are stored in containers, usually one container per device index. We need to get this container to set
+	// the properties we want, so we call this to retrieve a handle to it.
+	vr::PropertyContainerHandle_t container = vr::VRProperties()->TrackedDeviceToPropertyContainer(my_controller_index);
+	
+	// Let's begin setting up the properties now we've got our container.
+	// A list of properties availble is contained in vr::ETrackedDeviceProperty.
 
-    WSACleanup();
-    device_id_ = vr::k_unTrackedDeviceIndexInvalid;
+	// First, let's set the model number.
+	vr::VRProperties()->SetStringProperty(container, vr::Prop_ModelNumber_String, my_controller_model_number.c_str());
+
+	// Let's tell SteamVR our role which we received from the constructor earlier.
+	vr::VRProperties()->SetInt32Property(container, vr::Prop_ControllerRoleHint_Int32, my_controller_role);
+
+	// Now let's set up our inputs
+
+	// This tells the UI what to show the user for bindings for this controller,
+	// As well as what default bindings should be for legacy apps.
+	// Note, we can use the wildcard {<driver_name>} to match the root folder location
+	// of our driver.
+	vr::VRProperties()->SetStringProperty(container, vr::Prop_InputProfilePath_String, "{vr_controller_driver}/resources/input/vr_controller_driver_profile.json");
+
+	// Let's set up handles for all of our components. 
+	// Even though these are also defined in our input profile,
+	// We need to get handles to them to update the inputs.
+
+	// Let's set up our "A" button. We've defined it to have a touch and click component.
+	vr::VRDriverInput()->CreateBooleanComponent(container, "/input/a/touch", &input_handles[MyComponent_a_touch]);
+	vr::VRDriverInput()->CreateBooleanComponent(container, "/input/a/click", &input_handles[MyComponent_a_click]);
+
+	// Let's set up our trigger. We've defined it to have a value and click component
+
+	// CreateScalarComponent requires:
+	// EVRScalarType - whether the device can give an absolute position, or just one relative to where it was last.
+	// We can do it absolute.
+	// EVRScalarUnits - whether the devices has two "sides", like a joystick. This makes the range of valid inputs -1
+	// to 1. Otherwise, it's 0 to 1. We only have one "side", so ours is onesided.
+	vr::VRDriverInput()->CreateScalarComponent(container, "/input/trigger/value", &input_handles[MyComponent_trigger_value], vr::VRScalarType_Absolute, vr::VRScalarUnits_NormalizedOneSided);
+	vr::VRDriverInput()->CreateBooleanComponent(container, "/input/trigger/click", &input_handles[MyComponent_trigger_click]);
+
+	// Let's create our haptic component.
+	// These are global across the device, and you can only have one per device.
+	vr::VRDriverInput()->CreateHapticComponent(container, "/output/haptic", &input_handles[MyComponent_haptic]);
+
+	my_pose_update_thread = std::thread(&MyControllerDevice::MyPoseUpdateThread, this);
+
+	// We've activated everything successfully!
+	// Let's tell SteamVR that by saying we don't have any errors.
+	return vr::VRInitError_None;
 }
 
-void ControllerDevice::EnterStandby() {}
-
-void* ControllerDevice::GetComponent(const char* pchComponentNameAndVersion) {
-    return nullptr;
+// ---------------------------------------------------------------------------------------
+// Purpose: If you're an HMD, this is where you would return an implementation
+// of vr::IVRDisplayComponent, vr::IVRVirtualDisplay or vr::IVRDirectModeComponent.
+//
+// But this a simple example to demo for a controller, so we'll just return nullptr here.
+// ---------------------------------------------------------------------------------------
+void* MyControllerDevice::GetComponent(const char* pchComponentNameAndVersion)
+{
+	return NULL;
 }
 
-void ControllerDevice::DebugRequest(const char* pchRequest, char* pchResponseBuffer, uint32_t unResponseBufferSize) {
-    if (unResponseBufferSize >= 1)
-        pchResponseBuffer[0] = 0;
+// ---------------------------------------------------------------------------------------
+// Purpose: This is called by vrserver when a debug request has been made from an application to the driver.
+// What is in the response and request is up to the application and driver to figure our themselves.
+// ---------------------------------------------------------------------------------------
+void MyControllerDevice::DebugRequest(const char* pchRequest, char* pchResponseBuffer, uint32_t unResponseBufferSize)
+{
+	if (unResponseBufferSize >= 1)
+		pchResponseBuffer[0] = 0;
 }
 
-// -------------------------------------------------------------------------------------
-// RunFrame - called by SteamVR on the main driver thread, ~90 times per second
-// -------------------------------------------------------------------------------------
-void ControllerDevice::RunFrame() {
-    // Guard: device_id_ is k_unTrackedDeviceIndexInvalid until Activate() completes.
-    // Calling TrackedDevicePoseUpdated or UpdateBooleanComponent before that
-    // produces the "invalid object ID -1" and "Invalid handle" errors in the log.
-    if (device_id_ == vr::k_unTrackedDeviceIndexInvalid) return;
+// ---------------------------------------------------------------------------------------
+// Purpose: This is never called by vrserver in recent OpenVR versions,
+// but is useful for giving data to vr::VRServerDriverHost::TrackedDevicePoseUpdated.
+// ---------------------------------------------------------------------------------------
+vr::DriverPose_t MyControllerDevice::GetPose()
+{
+	// Let's retrieve the Hmd pose to base our controller pose off.
 
-    vr::VRServerDriverHost()->TrackedDevicePoseUpdated(device_id_, GetPose(), sizeof(vr::DriverPose_t));
+	// First, initialize the struct that we'll be submitting to the runtime to tell it we've update our pose
+	vr::DriverPose_t pose = { 0 };
 
-    vr::VRDriverInput()->UpdateBooleanComponent(my_input_handles_[kInputHandle_A_click], false, 0.0);
-    vr::VRDriverInput()->UpdateBooleanComponent(my_input_handles_[kInputHandle_A_touch], false, 0.0);
-    vr::VRDriverInput()->UpdateScalarComponent(my_input_handles_[kInputHandle_trigger_value], 0.f, 0.0);
-    vr::VRDriverInput()->UpdateBooleanComponent(my_input_handles_[kInputHandle_trigger_click], false, 0.0); // Fixed: was UpdateScalarComponent
-    vr::VRDriverInput()->UpdateScalarComponent(my_input_handles_[kInputHandle_joystick_x], 0.0f, 0.0);
-    vr::VRDriverInput()->UpdateScalarComponent(my_input_handles_[kInputHandle_joystick_y], 0.0f, 0.0);
-    vr::VRDriverInput()->UpdateBooleanComponent(my_input_handles_[kInputHandle_joystick_click], false, 0.0);
+	// These need to be set to be valid quaternions. The device won't appear otherwise.
+	pose.qWorldFromDriverRotation.w = 1.f;
+	pose.qDriverFromHeadRotation.w = 1.f;
 
+	vr::TrackedDevicePose_t hmd_pose{};
+
+	// GetRawTrackedDevicePoses expects an array.
+	// We only want the hmd pose, which is at index 0 of the array so we can just pass the struct in directly, instead of in an array
+	vr::VRServerDriverHost()->GetRawTrackedDevicePoses(0.f, &hmd_pose, 1);
+
+	// Get the position of the hmd form the 3x4 matrix GetRawTrackedDevicePoses returns
+	const vr::HmdVector3_t hmd_position = HmdVector3_From34Matrix(hmd_pose.mDeviceToAbsoluteTracking);
+	// Get the orientation of the hmd from the 3x4 matrix GetRawTrackedDevicePoses returns
+	const vr::HmdQuaternion_t hmd_orientation = HmdQuaternion_FromMatrix(hmd_pose.mDeviceToAbsoluteTracking);
+
+	// Pitch the controller 90 degrees so the face of the controller is facing towards us
+	const vr::HmdQuaternion_t offset_orientation = HmdQuaternion_FromEulerAngles(0.f, DEG_TO_RAD(90.f), 0.f);
+
+	// Set the pose orientation to the hmd orientation with the offset applied.
+	pose.qRotation = hmd_orientation * offset_orientation;
+
+	const vr::HmdVector3_t offset_position = {
+		my_controller_role == vr::TrackedControllerRole_LeftHand ? -0.15f : 0.15f,	// Translate the controller left/right 0.15m depending on its role
+		0.1f,	// Shift it up a little to make it more in view
+		-0.5f	// Put each controller 0.5m forward in front of the hmd so we can see it
+	};
+
+	// Rotate our offset by the Hmd quaternion (so the controllers are always facing towards us), 
+	// and then add the position of the hmd to put it into position.
+	const vr::HmdVector3_t position = hmd_position + (offset_position * hmd_orientation);
+
+	// Copy our position to our pose
+	pose.vecPosition[0] = position.v[0];
+	pose.vecPosition[1] = position.v[1];
+	pose.vecPosition[2] = position.v[2];
+
+	// The pose we provided is valid
+	// This should be set is
+	pose.poseIsValid = true;
+
+	// Our device is always connected.
+	// In reality with physical devices, when they get disconnected,
+	// Set this to false and icons in SteamVR will be updated to show the device is disconnected
+	pose.deviceIsConnected = true;
+
+	// The stat of our tracking. Four our virtual device, it's always going to be ok,
+	// but this can get set differently to inform the runtime about the state of the device's tracking
+	// and update the icons to inform the user accordingly.
+	pose.result = vr::TrackingResult_Running_OK;
+
+	return pose;
 }
 
-// -------------------------------------------------------------------------------------
-// GetPose - reads the latest pose from live_pose_ under the mutex
-// -------------------------------------------------------------------------------------
-vr::DriverPose_t ControllerDevice::GetPose() {
-    vr::DriverPose_t pose   = { 0 };
-    pose.poseIsValid        = true;
-    pose.result             = vr::TrackingResult_Running_OK;
-    pose.deviceIsConnected  = true;
+void MyControllerDevice::MyPoseUpdateThread()
+{
+	while (is_active)
+	{
+		// Inform the vrserver that our tracked device's pose has updated, giving it the pose returned by our GetPose().
+		vr::VRServerDriverHost()->TrackedDevicePoseUpdated(my_controller_index, GetPose(), sizeof(vr::DriverPose_t));
 
-    // These two quaternions describe coordinate space transforms.
-    // Setting them to identity (w=1) means we're working in the same
-    // coordinate space as SteamVR - which is correct for out setup/
-    pose.qWorldFromDriverRotation.w = 1.f;
-    pose.qDriverFromHeadRotation.w  = 1.f;
-
-    // Lock and copy the latest data written by ReceiverThread.
-    {
-        std::lock_guard<std::mutex> lock(pose_mutex_);
-        pose.qRotation.w = live_pose_.qw;
-        pose.qRotation.x = live_pose_.qx;
-        pose.qRotation.y = live_pose_.qy;
-        pose.qRotation.z = live_pose_.qz;
-        pose.vecPosition[0] = live_pose_.x;
-        pose.vecPosition[1] = live_pose_.y;
-        pose.vecPosition[2] = live_pose_.z;
-    }
-
-    return pose;
+		// Update our pose every five milliseconds.
+		// In reality, you should update the pose whenever you have new data from your device.
+		std::this_thread::sleep_for(std::chrono::milliseconds(5));
+	}
 }
 
-// -------------------------------------------------------------------------------------
-// ReceiverThread - runs on a background thread, received UDP packets from ESP32
-// -------------------------------------------------------------------------------------
-bool ControllerDevice::ValidateChecksum(const ControllerPacket& pkt) {
-    // Sum every byte except the last 2 (the checksum field itself)
-    const uint8_t* bytes = reinterpret_cast<const uint8_t*>(&pkt);
-    uint16_t sum = 0;
-    for (size_t i = 0; i < sizeof(ControllerPacket) - sizeof(uint16_t); ++i) {
-        sum += bytes[i];
-    }
-    return sum == pkt.checksum;
+// --------------------------------------------------------------------------------
+// Purpose: This is called by vrserver when the device should enter stanby mode.
+// The device should be put into whatever low power mode it has.
+// We don't really have anything to do here, so let's just log something.
+// --------------------------------------------------------------------------------
+void MyControllerDevice::EnterStandby()
+{
+	DriverLog("%s hand has been put on standby", my_controller_role == vr::TrackedControllerRole_LeftHand ? "Left" : "Right");
 }
 
-void ControllerDevice::ReceiverThread() {
-    // --1. Create the UDP socket ------------------------------------------------------
-    // AF_INET      = IPv4, 
-    // SOCK_DGRAM   = UDP (connectionless datagrams)
-    // IPPROTO_UDP  = explicitly UDP
-    udp_socket_ = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
-    if (udp_socket_ == INVALID_SOCKET) {
-        vr::VRDriverLog()->Log("ReceiverThread: Failed to create UDP socket");
-        return;
-    }
+// --------------------------------------------------------------------------------
+// Purpose: This is called by vrserver when the device should deactivate.
+// This is typically at the end of a session.
+// The device should free any resources it has allocated here.
+// --------------------------------------------------------------------------------
+void MyControllerDevice::Deactivate()
+{
+	// Let's join our pose thread that's running
+	// by first checking then setting is_active to false to break out
+	// of the while loop, if it's running, then call .join() on the thread
+	if (is_active.exchange(false))
+		my_pose_update_thread.join();
 
-    // Set a receive timeout so the thread can periodically check running_
-    // even if no packets arrive. Without this, recvfrom() would block forever
-    // and the thread could not exit cleanly when Deactivate() is called.
-    DWORD timeout_ms = 500; // check running_ flag every 500ms at minimum
-    setsockopt(udp_socket_, SOL_SOCKET, SO_RCVTIMEO,
-               reinterpret_cast<const char*>(&timeout_ms), sizeof(timeout_ms));
+	// Unassign our controller index (we don't want to be calling vrserver anymore after Deactivate() has been called.
+	my_controller_index = vr::k_unTrackedDeviceIndexInvalid;
+}
 
-    // --2. Bind the socket to a local port --------------------------------------------
-    // INADDR_ANY means accept packets on any local network interface,
-    // so we don't need to hard-code which network adapter to use.
-    sockaddr_in local_addr{};
-    local_addr.sin_family       = AF_INET;
-    local_addr.sin_addr.s_addr  = INADDR_ANY;
-    local_addr.sin_port         = htons(udp_port_); // htons converts host byte order to network byte order 
+// ---------------------------------------------------------------------------------
+// Purpose: This is called by our IServerTrackedDeviceProvider when its RunFrame() method gets called.
+// It's not part of the ITrackedDeviceServerDriver interface, we created it ourselves.
+// ---------------------------------------------------------------------------------
+void MyControllerDevice::MyRunFrame()
+{
+	// Update our inputs here. For actual inputs coming from hardware, these will probably be read in a separate thread.
+	vr::VRDriverInput()->UpdateBooleanComponent(input_handles[MyComponent_a_click], false, 0);
+	vr::VRDriverInput()->UpdateBooleanComponent(input_handles[MyComponent_a_touch], false, 0);
 
-    if (bind(udp_socket_, reinterpret_cast<sockaddr*>(&local_addr), sizeof(local_addr)) == SOCKET_ERROR) {
-        vr::VRDriverLog()->Log("ReceiverThread: Failed to bind UDP socket");
-        closesocket(udp_socket_);
-        udp_socket_ = INVALID_SOCKET;
-        return;
-    }
+	vr::VRDriverInput()->UpdateBooleanComponent(input_handles[MyComponent_trigger_click], false, 0);
+	vr::VRDriverInput()->UpdateScalarComponent(input_handles[MyComponent_trigger_value], 0.f, 0);
 
-    char log_buf[128];
-    snprintf(log_buf, sizeof(log_buf), "ReceiverThread: Listening on UDP port %d", udp_port_);
-    vr::VRDriverLog()->Log(log_buf);
+	// If we wanted to set the trigger value to 1, we could do:
+	// vr::VRDriverInput()->UpdateScalarComponent(input_handles[MyComponent_trigger_value], 1.f, 0);
 
-    // --3. Receive Loop----------------------------------------------------------------
-    while (running_) {
-        ControllerPacket    pkt{};
-        sockaddr_in         sender_addr{};
-        int                 sender_len = sizeof(sender_addr);
-        
-        // recvfrom blocks until a packet arrives or the timeout expires. 
-        // It returns the number of bytes received, or SOCKET_ERROR on failure.
-        int bytes_received = recvfrom(
-            udp_socket_,
-            reinterpret_cast<char*>(&pkt),  // receive directly into packet struct
-            sizeof(ControllerPacket),
-            0,                              // no flags
-            reinterpret_cast<sockaddr*>(&sender_addr),
-            &sender_len
-        );
+	// or say that the A button has been clicked:
+	// vr::VRDriverInput()->UpdateBooleanComponent(input_handles[MyComponent_a_click], true, 0);
+}
 
-        if (bytes_received == SOCKET_ERROR) {
-            int err = WSAGetLastError();
-            // WSAETIMEDOUT is expected - it just means no packet arrived in
-            // the timeout window. Loop back and check running_.
-            if (err == WSAETIMEDOUT) continue;
-            // Any other error (WSAENOTSOCK happens when Deactivate() closes
-            // the socket) means we should stop the thread.
-            break;
-        }
+// ---------------------------------------------------------------------------------
+// Purpose: This is called by our IServerTrackedDeviceProvider when it pops an event off the event queue.
+// It's not part of the ITrackedDeviceServerDriver interface, we created it ourselves.
+// ---------------------------------------------------------------------------------
+void MyControllerDevice::MyProcessEvent(const vr::VREvent_t& vrevent)
+{
+	switch (vrevent.eventType)
+	{
+		// Listen for haptic event
+	case vr::VREvent_Input_HapticVibration:
+	{
+		// We now need to make sure that the event was inteded for this device.
+		// So let's compare handles of the event and our haptic component
+		if (vrevent.data.hapticVibration.componentHandle == input_handles[MyComponent_haptic])
+		{
+			// The event was intended for us!
+			// To convert the data to a pulse, see the docs.
+			// For this driver, we'll just print the values.
+			float duration = vrevent.data.hapticVibration.fDurationSeconds;
+			float frequency = vrevent.data.hapticVibration.fFrequency;
+			float amplitude = vrevent.data.hapticVibration.fAmplitude;
 
-        // Discard packets that are the wrong size
-        if (bytes_received != sizeof(ControllerPacket)) continue;
+			DriverLog("Haptic event triggered for %s hmd. Duration: %.2f, Frequency: %.2f, Amplitude: %.2f",
+				my_controller_role == vr::TrackedControllerRole_LeftHand ? "left" : "right", duration, frequency, amplitude);
+		}
+		break;
+	}
+	default:
+		break;
+	}
+}
 
-        // Discard packets with wrong header byte
-        if (pkt.header != 0xAA) continue;
-
-        // Discard packets that fail checksum validation
-        if (!ValidateChecksum(pkt)) continue;
-
-        // Discard packets not meant for this controller
-        uint8_t expected_id = (my_controller_role_ == vr::TrackedControllerRole_LeftHand) ? 0 : 1;
-        if (pkt.controller_id != expected_id) continue;
-
-        // --4. Update the shared pose data---------------------------------------------
-        // The lock_guard locks pose_mutex_ on contruction and unlocks it
-        // when it goes out of scope at the end of this block.
-        {
-            std::lock_guard<std::mutex> lock(pose_mutex_);
-            live_pose_.qw = pkt.qw;
-            live_pose_.qx = pkt.qx;
-            live_pose_.qy = pkt.qy;
-            live_pose_.qz = pkt.qz;
-            live_pose_.x = pkt.x;
-            live_pose_.y = pkt.y;
-            live_pose_.z = pkt.z;
-        } 
-    }
-
-    vr::VRDriverLog()->Log("ReceiverThread: Exiting");
+// ------------------------------------------------------------------------------------
+// Purpose: Our IServerTrackedDeviceProvider needs our serial number to add us to vrserver.
+// It's not part of the ITrackedDeviceServerDriver interface, we created it ourselves.
+const std::string& MyControllerDevice::MyGetSerialNumber()
+{
+	return my_controller_serial_number;
 }
